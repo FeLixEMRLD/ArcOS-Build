@@ -1,140 +1,50 @@
-name: Build ArcOS V0.1-ALPHA (emerald)
+name: Build ArcOS V0.1-ALPHA
 
 on:
-  workflow_dispatch:
-    inputs:
-      base_gsi_url:
-        description: 'Direct Download Link to A16 GMS Base (.img.xz)'
-        required: true
-        default: 'https://github.com/ponces/treble_aosp/releases/download/v2025.06.25/aosp-arm64-ab-gapps-16.0-20250625.img.xz'
+  workflow_dispatch: # Allows you to trigger the build manually via a button click
 
 permissions:
   contents: write
 
 jobs:
-  build-arcos:
+  build:
+    name: Build ArcOS System Image
     runs-on: ubuntu-24.04
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout ArcOS Source Tree
         uses: actions/checkout@v4
 
-      - name: Free Up Server Disk Space (Gives ~70GB Free)
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          df -h
-
-      - name: Install Android Image Tools
+      - name: Install Android Build & Filesystem Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y xz-utils gzip e2fsprogs erofs-utils android-sdk-libsparse-utils curl jq wget
+          sudo apt-get install -y android-sdk-libsparse-utils e2fsprogs simg2img img2simg gzip wget
 
-      - name: Download Android 16 GMS Base
+      - name: Make Scripts Executable
         run: |
-          echo "Downloading Android 16 GMS Base..."
-          wget -q --show-progress -O base_rom.img.xz "${{ github.event.inputs.base_gsi_url }}"
-          echo "Extracting .xz archive..."
-          unxz -T0 base_rom.img.xz
-          mv base_rom.img system.img
-          file system.img
+          chmod +x scripts/build_arcos.sh
 
-      - name: Convert & Unlock Android 16 Image for R/W Modification
+      - name: Run ArcOS Engine
         run: |
-          # 1. If the image is Android Sparse format, convert it to raw image
-          if file system.img | grep -q "sparse"; then
-            echo "Converting sparse image to raw..."
-            simg2img system.img system_raw.img
-            mv system_raw.img system.img
-          fi
+          ./scripts/build_arcos.sh
 
-          # 2. If the image is EROFS, convert it into a writable EXT4 image
-          if file system.img | grep -qi "erofs"; then
-            echo "EROFS detected! Extracting and converting to writable EXT4..."
-            mkdir -p erofs_dump
-            sudo fsck.erofs --extract=erofs_dump system.img
-            rm system.img
-            # Create a 6GB blank ext4 image and populate it
-            dd if=/dev/zero of=system.img bs=1M count=6144
-            sudo mkfs.ext4 -F -L / -d erofs_dump system.img
-            sudo rm -rf erofs_dump
-          fi
-
-          # 3. Expand image by 1GB so e2fsck has room to unshare Android 16 blocks!
-          echo "Expanding image size to unlock R/W..."
-          dd if=/dev/zero bs=1M count=1024 >> system.img
-          sudo e2fsck -fy system.img || true
-          sudo resize2fs system.img
-
-          # 4. THE FIX: Remove Android 16 shared_blocks & read-only flags!
-          echo "Removing shared_blocks lock..."
-          sudo e2fsck -fy -E unshare_blocks system.img || true
-          sudo tune2fs -O ^read-only system.img || true
-          sudo e2fsck -fy system.img || true
-
-      - name: Mount & Inject ArcOS V0.1-ALPHA (alpha)
-        run: |
-          mkdir -p mnt
-          sudo mount -t ext4 -o loop,rw system.img mnt
-
-          echo "Injecting ArcOS OEM Properties..."
-          PROP_FILE="mnt/system/build.prop"
-          if [ ! -f "$PROP_FILE" ]; then PROP_FILE="mnt/build.prop"; fi
-
-          sudo bash -c "cat << 'EOF' >> $PROP_FILE
-
-          # ==========================================
-          # ArcOS OEM Properties
-          # ==========================================
-          ro.arcos.version=ArcOS V0.1-ALPHA
-          ro.arcos.codename=alpha
-          ro.arcos.device=emerald
-          ro.arcos.build.type=OEM-Alpha
-          ro.build.display.id=ArcOS V0.1-ALPHA (alpha)
-
-          # Redmi Note 13 Pro 4G (emerald / Helio G99) Fixes
-          ro.surface_flinger.set_idle_timer_ms=80
-          ro.surface_flinger.set_touch_timer_ms=200
-          persist.sys.usb.config=mtp,adb
-          ro.adb.secure=0
-          EOF"
-
-          # Create OEM directories for our upcoming custom ArcSetupWizard & Launcher
-          sudo mkdir -p mnt/system/priv-app/ArcSetupWizard
-          sudo mkdir -p mnt/system/priv-app/ArcOSLauncher
-          sudo mkdir -p mnt/product/overlay/ArcOSFrameworkOverlay
-
-          # Sync and unmount cleanly
-          sync
-          sudo umount mnt
-
-      - name: Shrink & Optimize Image for DSU Sideloader
-        run: |
-          # Shrink image back down so it doesn't waste space on your phone
-          sudo e2fsck -fy system.img || true
-          sudo resize2fs -M system.img
-          sudo e2fsck -fy system.img || true
-          
-          mv system.img ArcOS-V0.1-ALPHA-emerald-A16-GMS.img
-
-      - name: Package as .img.gz (Fast/Safe Compression, No .zip!)
-        run: |
-          echo "Compressing into .img.gz..."
-          gzip -1 -k ArcOS-V0.1-ALPHA-emerald-A16-GMS.img
-          ls -lh ArcOS-V0.1-ALPHA-emerald-A16-GMS.img.gz
-
-      - name: Publish ArcOS Release to GitHub
+      - name: Create GitHub Release and Upload Image
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1-alpha-${{ github.run_number }}
-          name: "ArcOS V0.1-ALPHA (Codename: alpha) - Build #${{ github.run_number }}"
+          tag_name: v0.1-ALPHA
+          name: "ArcOS V0.1-ALPHA (emerald)"
           body: |
-            ### ArcOS V0.1-ALPHA (`alpha`)
-            * **Target Device:** Redmi Note 13 Pro 4G (`emerald`)
-            * **Base:** Android 16 (GMS Included - R/W Unlocked)
-            * **Format:** `.img.gz` (No `.zip` wrapper, optimized for DSU Sideloader)
-          files: |
-            ArcOS-V0.1-ALPHA-emerald-A16-GMS.img.gz
+            ### ArcOS V0.1-ALPHA
+            - **Target Device:** Redmi Note 13 Pro 4G (`emerald`)
+            - **Chipset:** MediaTek Helio G99 Ultra
+            - **Base:** Android 16 (GMS Ready)
+            - **Installation Target:** DSU Sideloader
+            
+            #### Applied Fixes:
+            - Calibrated LCD Density: `440 DPI`
+            - Notch & Status Bar Padding: `104px`
+            - 120Hz refresh-rate scheduling enabled
+            - Helio G99 backlight curve fix
+          files: ArcOS-V0.1-ALPHA-emerald.img.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
