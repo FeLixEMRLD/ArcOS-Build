@@ -1,0 +1,130 @@
+name: Build ArcOS V0.1-ALPHA (emerald)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build_rom:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout ArcOS Repository
+        uses: actions/checkout@v4
+
+      - name: Free Up Server Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Install Android Build Tools & Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aapt2 zipalign openjdk-17-jdk e2fsprogs xz-utils jq curl wget gzip
+
+      - name: Compile ArcOS Emerald Hardware Overlay
+        run: |
+          echo "Downloading Android SDK platform jar..."
+          wget -q https://raw.githubusercontent.com/Sable/android-platforms/master/android-34/android.jar -O android.jar
+          
+          echo "Compiling resources with aapt2..."
+          mkdir -p compiled_res
+          aapt2 compile --dir overlay/res -o compiled_res/
+          aapt2 link -o unsigned.apk -I android.jar --manifest overlay/AndroidManifest.xml compiled_res/*
+          
+          echo "Signing Overlay APK..."
+          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=ArcOS,OU=Android,O=ArcCompany,L=Manila,ST=NCR,C=PH"
+          zipalign -p -f -v 4 unsigned.apk aligned.apk
+          /usr/lib/jvm/java-17-openjdk-amd64/bin/jarsigner -verbose - keystore debug.keystore -storepass android -keypass android aligned.apk androiddebugkey
+          mv aligned.apk ArcOSEmeraldOverlay.apk
+
+      - name: Download Android 16 GMS Base Image
+        run: |
+          echo "Fetching latest Android 16 GMS release from ponces/treble_aosp..."
+          LATEST_URL=$(curl -s https://api.github.com/repos/ponces/treble_aosp/releases | jq -r '.[].assets[] | select(.name | test("arm64-ab-gapps.*\\.img\\.xz$")) | .browser_download_url' | head -n 1)
+          
+          if [ -z "$LATEST_URL" ]; then
+            echo "Fallback to direct search..."
+            LATEST_URL=$(curl -s https://api.github.com/repos/TrebleDroid/treble_experimentations/releases | jq -r '.[].assets[] | select(.name | test("arm64-ab-gapps.*\\.img\\.xz$")) | .browser_download_url' | head -n 1)
+          fi
+          
+          echo "Downloading: $LATEST_URL"
+          aria2c -x 16 -s 16 "$LATEST_URL" -o system.img.xz || wget -q "$LATEST_URL" -O system.img.xz
+          
+          echo "Extracting raw image..."
+          xz -d system.img.xz
+
+      - name: Mount & Inject ArcOS V0.1-ALPHA Customizations
+        run: |
+          echo "Expanding image by 200MB to ensure safe write space..."
+          dd if=/dev/zero bs=1M count=200 >> system.img
+          sudo e2fsck -fy system.img || true
+          sudo resize2fs system.img
+
+          mkdir -p mount_point
+          sudo mount -o loop,rw system.img mount_point
+
+          echo "Injecting ArcOS Emerald Overlay..."
+          sudo mkdir -p mount_point/system/product/overlay/ArcOSEmeraldOverlay
+          sudo cp ArcOSEmeraldOverlay.apk mount_point/system/product/overlay/ArcOSEmeraldOverlay/
+          sudo chmod 644 mount_point/system/product/overlay/ArcOSEmeraldOverlay/ArcOSEmeraldOverlay.apk
+
+          echo "Injecting ArcOS V0.1-ALPHA System Properties & DPI..."
+          sudo tee -a mount_point/system/build.prop > /dev/null << 'EOF'
+
+          # ==========================================
+          # ArcOS Custom OEM Properties
+          # ==========================================
+          ro.arcos.version=ArcOS V0.1-ALPHA
+          ro.arcos.codename=alpha
+          ro.arcos.device=emerald
+          ro.build.display.id=ArcOS V0.1-ALPHA (alpha)
+          ro.modversion=ArcOS-V0.1-ALPHA-emerald
+
+          # Redmi Note 13 Pro 4G (emerald) Display & Performance
+          ro.sf.lcd_density=440
+          persist.sys.sf.color_saturation=1.1
+          ro.surface_flinger.set_idle_timer_ms=80
+          ro.surface_flinger.set_touch_timer_ms=200
+
+          # Enable Treble MediaTek & Xiaomi Specific Fixes
+          persist.sys.phh.xiaomi.dt2w=true
+          persist.sys.phh.backlight.scale=1
+          EOF
+
+          sudo tee -a mount_point/system/product/etc/build.prop > /dev/null << 'EOF'
+          ro.product.System.brand=ArcOS
+          ro.product.System.model=Redmi Note 13 Pro 4G (ArcOS)
+          EOF
+
+          echo "Unmounting and shrinking image for DSU..."
+          sudo umount mount_point
+          sudo e2fsck -fy system.img || true
+          sudo resize2fs -M system.img
+
+          echo "Compressing into DSU-compatible .gz format..."
+          mv system.img ArcOS-V0.1-ALPHA-A16-emerald-GMS.img
+          gzip -c ArcOS-V0.1-ALPHA-A16-emerald-GMS.img > ArcOS-V0.1-ALPHA-A16-emerald-GMS.img.gz
+
+      - name: Publish ArcOS V0.1-ALPHA to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1-ALPHA
+          name: "ArcOS V0.1-ALPHA (Codename: alpha) - Android 16 GMS"
+          body: |
+            ### 🌑 ArcOS V0.1-ALPHA | The Black Sheep of Custom ROMs
+            * **Codename:** `alpha`
+            * **Target Device:** Redmi Note 13 Pro 4G / POCO M6 Pro (`emerald`)
+            * **Android Version:** Android 16 (GMS Included)
+            * **Status:** DSU Sideloader Ready
+
+            #### Changelog (V0.1-ALPHA):
+            * Initial Android 16 GMS bring-up for `emerald`.
+            * Custom static RRO overlay injected for center punch-hole padding, rounded corners, and 120Hz refresh rate.
+            * Native DPI locked to `440`.
+            * Added MediaTek/HyperOS backlight and DT2W compatibility flags.
+          files: ArcOS-V0.1-ALPHA-A16-emerald-GMS.img.gz
