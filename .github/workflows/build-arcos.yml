@@ -21,34 +21,37 @@ jobs:
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
           df -h
 
-      - name: Install Android Build Tools & Dependencies
+      - name: Install System Utilities
         run: |
           sudo apt-get update
-          sudo apt-get install -y aapt2 zipalign openjdk-17-jdk e2fsprogs xz-utils jq curl wget gzip
+          sudo apt-get install -y openjdk-17-jdk e2fsprogs xz-utils jq curl wget gzip aria2
 
-      - name: Compile ArcOS Emerald Hardware Overlay
+      - name: Compile & Sign ArcOS Emerald Hardware Overlay
         run: |
-          echo "Downloading Android SDK platform jar..."
-          wget -q https://raw.githubusercontent.com/Sable/android-platforms/master/android-34/android.jar -O android.jar
-          
+          echo "Locating pre-installed Android SDK Build Tools..."
+          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
+          PLATFORM_JAR=$(ls $ANDROID_HOME/platforms/android-*/android.jar | sort -V | tail -n 1)
+          echo "Using Build Tools: $BUILD_TOOLS_DIR"
+          echo "Using Platform JAR: $PLATFORM_JAR"
+
           echo "Compiling resources with aapt2..."
           mkdir -p compiled_res
-          aapt2 compile --dir overlay/res -o compiled_res/
-          aapt2 link -o unsigned.apk -I android.jar --manifest overlay/AndroidManifest.xml compiled_res/*
-          
-          echo "Signing Overlay APK..."
+          "$BUILD_TOOLS_DIR/aapt2" compile --dir overlay/res -o compiled_res/
+          "$BUILD_TOOLS_DIR/aapt2" link -o unsigned.apk -I "$PLATFORM_JAR" --manifest overlay/AndroidManifest.xml compiled_res/*
+
+          echo "Aligning and V2/V3 Signing Overlay APK for Android 16..."
+          "$BUILD_TOOLS_DIR/zipalign" -p -f -v 4 unsigned.apk aligned.apk
           keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=ArcOS,OU=Android,O=ArcCompany,L=Manila,ST=NCR,C=PH"
-          zipalign -p -f -v 4 unsigned.apk aligned.apk
-          /usr/lib/jvm/java-17-openjdk-amd64/bin/jarsigner -verbose - keystore debug.keystore -storepass android -keypass android aligned.apk androiddebugkey
-          mv aligned.apk ArcOSEmeraldOverlay.apk
+          "$BUILD_TOOLS_DIR/apksigner" sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --out ArcOSEmeraldOverlay.apk aligned.apk
+          ls -lh ArcOSEmeraldOverlay.apk
 
       - name: Download Android 16 GMS Base Image
         run: |
-          echo "Fetching latest Android 16 GMS release from ponces/treble_aosp..."
+          echo "Fetching latest Android 16 GMS release..."
           LATEST_URL=$(curl -s https://api.github.com/repos/ponces/treble_aosp/releases | jq -r '.[].assets[] | select(.name | test("arm64-ab-gapps.*\\.img\\.xz$")) | .browser_download_url' | head -n 1)
           
-          if [ -z "$LATEST_URL" ]; then
-            echo "Fallback to direct search..."
+          if [ -z "$LATEST_URL" ] || [ "$LATEST_URL" = "null" ]; then
+            echo "Fallback to TrebleDroid..."
             LATEST_URL=$(curl -s https://api.github.com/repos/TrebleDroid/treble_experimentations/releases | jq -r '.[].assets[] | select(.name | test("arm64-ab-gapps.*\\.img\\.xz$")) | .browser_download_url' | head -n 1)
           fi
           
@@ -97,8 +100,8 @@ jobs:
           EOF
 
           sudo tee -a mount_point/system/product/etc/build.prop > /dev/null << 'EOF'
-          ro.product.System.brand=ArcOS
-          ro.product.System.model=Redmi Note 13 Pro 4G (ArcOS)
+          ro.product.system.brand=ArcOS
+          ro.product.system.model=Redmi Note 13 Pro 4G (ArcOS)
           EOF
 
           echo "Unmounting and shrinking image for DSU..."
