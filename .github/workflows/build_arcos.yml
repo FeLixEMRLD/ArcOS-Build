@@ -1,7 +1,7 @@
 name: Build ArcOS V0.1-ALPHA
 
 on:
-  workflow_dispatch: # Allows you to trigger the build manually via a button click
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,10 +15,10 @@ jobs:
       - name: Checkout ArcOS Source Tree
         uses: actions/checkout@v4
 
-      - name: Install Android Build & Filesystem Tools
+      - name: Install Android Filesystem & Packaging Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y android-sdk-libsparse-utils e2fsprogs simg2img img2simg gzip wget
+          sudo apt-get install -y android-sdk-libsparse-utils e2fsprogs gzip wget xz-utils curl jq
 
       - name: Make Scripts Executable
         run: |
@@ -36,11 +36,10 @@ jobs:
           body: |
             ### ArcOS V0.1-ALPHA
             - **Target Device:** Redmi Note 13 Pro 4G (`emerald`)
-            - **Chipset:** MediaTek Helio G99 Ultra
             - **Base:** Android 16 (GMS Ready)
             - **Installation Target:** DSU Sideloader
             
-            #### Applied Fixes:
+            #### Integrated Hardware Fixes:
             - Calibrated LCD Density: `440 DPI`
             - Notch & Status Bar Padding: `104px`
             - 120Hz refresh-rate scheduling enabled
