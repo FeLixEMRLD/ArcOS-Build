@@ -29,37 +29,59 @@ jobs:
       - name: Install Android Image Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y xz-utils gzip e2fsprogs android-sdk-libsparse-utils curl jq wget
+          sudo apt-get install -y xz-utils gzip e2fsprogs erofs-utils android-sdk-libsparse-utils curl jq wget
 
       - name: Download Android 16 GMS Base
         run: |
           echo "Downloading Android 16 GMS Base..."
-          wget -O base_rom.img.xz "${{ github.event.inputs.base_gsi_url }}"
+          wget -q --show-progress -O base_rom.img.xz "${{ github.event.inputs.base_gsi_url }}"
           echo "Extracting .xz archive..."
           unxz -T0 base_rom.img.xz
           mv base_rom.img system.img
+          file system.img
 
-      - name: Convert & Expand System Image for Modification
+      - name: Convert & Unlock Android 16 Image for R/W Modification
         run: |
-          # Check if image is sparse; if so, convert to raw ext4
-          file system.img | grep -q "sparse" && simg2img system.img system_raw.img && mv system_raw.img system.img || true
-          
-          # Add 500MB headroom so we can add custom ArcOS apps/frameworks later
-          dd if=/dev/zero bs=1M count=500 >> system.img
-          e2fsck -fy system.img || true
-          resize2fs system.img
+          # 1. If the image is Android Sparse format, convert it to raw image
+          if file system.img | grep -q "sparse"; then
+            echo "Converting sparse image to raw..."
+            simg2img system.img system_raw.img
+            mv system_raw.img system.img
+          fi
+
+          # 2. If the image is EROFS, convert it into a writable EXT4 image
+          if file system.img | grep -qi "erofs"; then
+            echo "EROFS detected! Extracting and converting to writable EXT4..."
+            mkdir -p erofs_dump
+            sudo fsck.erofs --extract=erofs_dump system.img
+            rm system.img
+            # Create a 6GB blank ext4 image and populate it
+            dd if=/dev/zero of=system.img bs=1M count=6144
+            sudo mkfs.ext4 -F -L / -d erofs_dump system.img
+            sudo rm -rf erofs_dump
+          fi
+
+          # 3. Expand image by 1GB so e2fsck has room to unshare Android 16 blocks!
+          echo "Expanding image size to unlock R/W..."
+          dd if=/dev/zero bs=1M count=1024 >> system.img
+          sudo e2fsck -fy system.img || true
+          sudo resize2fs system.img
+
+          # 4. THE FIX: Remove Android 16 shared_blocks & read-only flags!
+          echo "Removing shared_blocks lock..."
+          sudo e2fsck -fy -E unshare_blocks system.img || true
+          sudo tune2fs -O ^read-only system.img || true
+          sudo e2fsck -fy system.img || true
 
       - name: Mount & Inject ArcOS V0.1-ALPHA (alpha)
         run: |
           mkdir -p mnt
-          sudo mount -o loop,rw system.img mnt
+          sudo mount -t ext4 -o loop,rw system.img mnt
 
           echo "Injecting ArcOS OEM Properties..."
-          # Locate build.prop
           PROP_FILE="mnt/system/build.prop"
           if [ ! -f "$PROP_FILE" ]; then PROP_FILE="mnt/build.prop"; fi
 
-          # Append ArcOS Versioning & Emerald Optimizations
           sudo bash -c "cat << 'EOF' >> $PROP_FILE
 
           # ==========================================
@@ -78,26 +100,27 @@ jobs:
           ro.adb.secure=0
           EOF"
 
-          # Create a custom OEM folder for future ArcOS Frameworks/Launchers
+          # Create OEM directories for our upcoming custom ArcSetupWizard & Launcher
+          sudo mkdir -p mnt/system/priv-app/ArcSetupWizard
           sudo mkdir -p mnt/system/priv-app/ArcOSLauncher
           sudo mkdir -p mnt/product/overlay/ArcOSFrameworkOverlay
 
-          # Unmount cleanly
+          # Sync and unmount cleanly
+          sync
           sudo umount mnt
 
       - name: Shrink & Optimize Image for DSU Sideloader
         run: |
-          e2fsck -fy system.img || true
-          resize2fs -M system.img
-          e2fsck -fy system.img || true
+          # Shrink image back down so it doesn't waste space on your phone
+          sudo e2fsck -fy system.img || true
+          sudo resize2fs -M system.img
+          sudo e2fsck -fy system.img || true
           
-          # Rename to raw system.img (Required by DSU Sideloader inside .gz)
           mv system.img ArcOS-V0.1-ALPHA-emerald-A16-GMS.img
 
       - name: Package as .img.gz (Fast/Safe Compression, No .zip!)
         run: |
           echo "Compressing into .img.gz..."
-          # Using -1 (fast compression) prevents DSU Sideloader decompression hangs
           gzip -1 -k ArcOS-V0.1-ALPHA-emerald-A16-GMS.img
           ls -lh ArcOS-V0.1-ALPHA-emerald-A16-GMS.img.gz
 
@@ -105,14 +128,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v0.1-alpha-${{ github.run_number }}
-          name: "ArcOS V0.1-ALPHA (Codename: alpha) - Build #${{ github.run_number }}"
-          body: |
-            ### ArcOS V0.1-ALPHA (`alpha`)
-            * **Target Device:** Redmi Note 13 Pro 4G (`emerald`)
-            * **Base:** Android 16 (GMS Included)
-            * **Format:** `.img.gz` (No `.zip` wrapper, optimized for DSU Sideloader)
-            * **Pre-configured:** ADB insecure enabled for boot debugging, `emerald` display refresh timers applied.
-          files: |
-            ArcOS-V0.1-ALPHA-emerald-A16-GMS.img.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: "ArcOS V0.1-AL
