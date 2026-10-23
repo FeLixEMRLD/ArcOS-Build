@@ -18,7 +18,7 @@ jobs:
       - name: Install Android Filesystem & Packaging Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y android-sdk-libsparse-utils e2fsprogs gzip wget xz-utils curl jq
+          sudo apt-get install -y android-sdk-libsparse-utils e2fsprogs gzip wget xz-utils curl jq file
 
       - name: Make Scripts Executable
         run: |
