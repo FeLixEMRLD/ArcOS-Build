@@ -128,4 +128,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v0.1-alpha-${{ github.run_number }}
-          name: "ArcOS V0.1-AL
+          name: "ArcOS V0.1-ALPHA (Codename: alpha) - Build #${{ github.run_number }}"
+          body: |
+            ### ArcOS V0.1-ALPHA (`alpha`)
+            * **Target Device:** Redmi Note 13 Pro 4G (`emerald`)
+            * **Base:** Android 16 (GMS Included - R/W Unlocked)
+            * **Format:** `.img.gz` (No `.zip` wrapper, optimized for DSU Sideloader)
+          files: |
+            ArcOS-V0.1-ALPHA-emerald-A16-GMS.img.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
