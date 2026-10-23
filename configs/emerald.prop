@@ -1,0 +1,26 @@
+# ArcOS System Identity - V0.1-ALPHA
+ro.arcos.version=ArcOS-V0.1-ALPHA
+ro.arcos.codename=alpha
+ro.build.display.id=ArcOS-0.1-ALPHA-emerald
+ro.arcos.build.type=OFFICIAL
+
+# Redmi Note 13 Pro 4G (emerald) Display & Density Fixes
+# 1080x2400 display with ~395 ppi (Optimal default Android density: 440)
+ro.sf.lcd_density=440
+
+# Force Center Punch-hole Cutout & Status Bar Padding
+ro.support.cutout=true
+# status_bar_height: 104px padding prevents the notch from overlapping status bar icons
+persist.sys.phh.status_bar_padding=104
+
+# Smooth Display: Allow 120Hz Refresh Rate
+ro.surface_flinger.use_content_detection_for_refresh_rate=true
+ro.surface_flinger.set_idle_timer_ms=1000
+ro.surface_flinger.set_touch_timer_ms=1000
+ro.surface_flinger.set_display_power_timer_ms=1000
+
+# MediaTek Helio G99 Backlight & Performance Fixes
+persist.sys.phh.backlight.scale=1
+persist.sys.phh.linear_brightness=false
+ro.surface_flinger.has_HDR_display=false
+persist.sys.qcom-bcl=0
